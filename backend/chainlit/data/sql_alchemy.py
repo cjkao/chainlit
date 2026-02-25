@@ -58,6 +58,7 @@ class SQLAlchemyDataLayer(BaseDataLayer):
         self.engine: AsyncEngine = create_async_engine(
             self._conninfo, connect_args=connect_args
         )
+        self.is_sqlite = self.engine.dialect.name == "sqlite"
         self.async_session = sessionmaker(
             bind=self.engine, expire_on_commit=False, class_=AsyncSession
         )  # type: ignore
@@ -73,6 +74,19 @@ class SQLAlchemyDataLayer(BaseDataLayer):
 
     async def build_debug_url(self) -> str:
         return ""
+
+    def _serialize_tags(self, tags: List[str]) -> str:
+        return json.dumps(tags)
+
+    def _deserialize_tags(self, tags: Union[str, List[str], None]) -> List[str]:
+        if self.is_sqlite and isinstance(tags, str):
+            try:
+                return json.loads(tags)
+            except json.JSONDecodeError:
+                return []
+        if tags is None:
+            return []
+        return tags
 
     ###### SQL Helpers ######
     async def execute_sql(
@@ -264,6 +278,8 @@ class SQLAlchemyDataLayer(BaseDataLayer):
             "tags": tags,
             "metadata": json.dumps(metadata) if metadata else None,
         }
+        if self.is_sqlite and tags is not None:
+            data["tags"] = self._serialize_tags(tags)
         parameters = {
             key: value for key, value in data.items() if value is not None
         }  # Remove keys with None values
@@ -383,6 +399,8 @@ class SQLAlchemyDataLayer(BaseDataLayer):
         }
         parameters["metadata"] = json.dumps(step_dict.get("metadata", {}))
         parameters["generation"] = json.dumps(step_dict.get("generation", {}))
+        if self.is_sqlite and "tags" in parameters and parameters["tags"] is not None:
+            parameters["tags"] = self._serialize_tags(parameters["tags"])
         columns = ", ".join(f'"{key}"' for key in parameters.keys())
         values = ", ".join(f":{key}" for key in parameters.keys())
         updates = ", ".join(
@@ -475,7 +493,7 @@ class SQLAlchemyDataLayer(BaseDataLayer):
                 if step_feedback.get("step_metadata") is not None
                 else {}
             ),
-            tags=step_feedback.get("step_tags"),
+            tags=self._deserialize_tags(step_feedback.get("step_tags")),
             input=(
                 step_feedback.get("step_input", "")
                 if step_feedback.get("step_showinput") not in [None, "false"]
@@ -752,13 +770,15 @@ class SQLAlchemyDataLayer(BaseDataLayer):
         for thread in user_threads:
             thread_id = thread["thread_id"]
             if thread_id is not None:
+                tags = self._deserialize_tags(thread["thread_tags"])
+
                 thread_dicts[thread_id] = ThreadDict(
                     id=thread_id,
                     createdAt=thread["thread_createdat"],
                     name=thread["thread_name"],
                     userId=thread["user_id"],
                     userIdentifier=thread["user_identifier"],
-                    tags=thread["thread_tags"],
+                    tags=tags,
                     metadata=thread["thread_metadata"],
                     steps=[],
                     elements=[],
@@ -790,7 +810,7 @@ class SQLAlchemyDataLayer(BaseDataLayer):
                             if step_feedback.get("step_metadata") is not None
                             else {}
                         ),
-                        tags=step_feedback.get("step_tags"),
+                        tags=self._deserialize_tags(step_feedback.get("step_tags")),
                         input=(
                             step_feedback.get("step_input", "")
                             if step_feedback.get("step_showinput")
@@ -913,7 +933,7 @@ class SQLAlchemyDataLayer(BaseDataLayer):
                             waitForAnswer=row.get("step_waitforanswer"),
                             isError=row.get("step_iserror"),
                             metadata=meta_dict,
-                            tags=row.get("step_tags"),
+                            tags=self._deserialize_tags(row.get("step_tags")),
                             input=(
                                 row.get("step_input", "")
                                 if row.get("step_showinput") not in [None, "false"]

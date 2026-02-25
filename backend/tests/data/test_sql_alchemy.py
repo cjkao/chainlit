@@ -1,5 +1,6 @@
 import uuid
 from pathlib import Path
+import json
 
 import pytest
 from sqlalchemy import text
@@ -216,3 +217,48 @@ async def test_delete_thread(test_user: User, data_layer: SQLAlchemyDataLayer):
     await data_layer.delete_thread("test_thread")
     thread = await data_layer.get_thread("test_thread")
     assert thread is None
+
+async def test_tags_persistence(test_user: User, data_layer: SQLAlchemyDataLayer):
+    persisted_user = await data_layer.create_user(test_user)
+    assert persisted_user
+
+    thread_id = str(uuid.uuid4())
+    tags = ["tag1", "tag2"]
+
+    # Create thread with tags
+    await data_layer.update_thread(
+        thread_id=thread_id,
+        user_id=persisted_user.id,
+        tags=tags
+    )
+
+    # Retrieve thread and check tags
+    thread = await data_layer.get_thread(thread_id)
+    assert thread is not None
+    assert thread["tags"] == tags
+
+async def test_step_tags_persistence(test_user: User, data_layer: SQLAlchemyDataLayer, mock_chainlit_context):
+    async with mock_chainlit_context:
+        persisted_user = await data_layer.create_user(test_user)
+
+        thread_id = str(uuid.uuid4())
+        await data_layer.update_thread(thread_id=thread_id, user_id=persisted_user.id)
+
+        step_id = str(uuid.uuid4())
+        tags = ["step_tag1", "step_tag2"]
+
+        step_dict = {
+            "id": step_id,
+            "name": "test_step",
+            "type": "user_message",
+            "threadId": thread_id,
+            "tags": tags,
+            "disableFeedback": False,
+            "streaming": False
+        }
+
+        await data_layer.create_step(step_dict)
+
+        step = await data_layer.get_step(step_id)
+        assert step is not None
+        assert step["tags"] == tags
